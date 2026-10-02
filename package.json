@@ -1,0 +1,11 @@
+{
+  "name": "backoff-lab",
+  "version": "0.1.0",
+  "description": "Retry backoff with jitter, SRE retry budgets and a circuit breaker, with seeded simulations of what each does to a contended or overloaded server.",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test"
+  }
+}
