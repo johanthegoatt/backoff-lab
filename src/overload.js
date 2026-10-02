@@ -6,10 +6,11 @@
 // (the trigger) grows the queue past the timeout; from then on the server
 // is busy answering requests nobody is waiting for, the timeouts produce
 // retries, the retries keep the queue long, and the system stays broken
-// after the trigger is gone. Bronson et al. call this a metastable failure
-// ("Metastable Failures in Distributed Systems", HotOS 2021; "Metastable
-// Failures in the Wild", OSDI 2022), and retry policy decides whether the
-// sustaining loop can close.
+// after the trigger is gone. Bronson et al. named this a metastable failure
+// ("Metastable Failures in Distributed Systems", HotOS 2021), and Huang et
+// al. found retries driving it in real outages at AWS, Google Cloud and
+// Azure ("Metastable Failures in the Wild", OSDI 2022). Retry policy decides
+// whether the sustaining loop can close.
 //
 // Time advances in fixed ticks; arrivals are Poisson; every random draw
 // comes from one seeded generator.

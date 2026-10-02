@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Backoff Lab</title>
+  <meta name="description" content="What retry policy does to a contended row and to an overloaded server: jittered backoff, retry budgets and circuit breakers, simulated with a seed.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="src/style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">backoff-lab</p>
+      <h1>Retries are load</h1>
+      <p class="lede">Every retry is another request the server has to handle at the worst possible
+        moment. Below, the same seeded clients run through five <strong>backoff schedules</strong>
+        fighting over one database row, then through four <strong>retry policies</strong> while a
+        server loses capacity for a few seconds. Everything runs in this tab.</p>
+    </header>
+
+    <h2 class="section-h">1. Contention: who wakes up together collides together</h2>
+    <p class="section-p">N clients update one row with optimistic concurrency. A write only commits if
+      nobody else committed since that client's read, so losers back off and retry. Network hops take
+      10ms ± 2ms, as in Marc Brooker's AWS article this reproduces.</p>
+    <form id="c-controls" class="panel" aria-label="Contention settings">
+      <label>Clients <output name="clientsOut"></output>
+        <input type="range" name="clients" min="5" max="200" step="5" value="100">
+      </label>
+      <label>Base delay <output name="baseOut"></output>
+        <input type="range" name="base" min="1" max="50" value="5">
+      </label>
+      <label>Seed <output name="seedOut"></output>
+        <input type="range" name="seed" min="1" max="50" value="1">
+      </label>
+    </form>
+    <section class="grid" id="c-cards" aria-live="polite"></section>
+
+    <h2 class="section-h">2. Overload: the storm that outlives its cause</h2>
+    <p class="section-p">A server handles 1,000 requests a second against steady traffic of
+      <span id="rateText"></span>. Clients time out after <span id="timeoutText"></span>, but the server
+      still spends capacity on requests nobody is waiting for. Capacity drops to 20% for a few seconds.
+      Whether it comes back depends only on the retry policy.</p>
+    <form id="o-controls" class="panel" aria-label="Overload settings">
+      <label>Steady load <output name="rateOut"></output>
+        <input type="range" name="rate" min="300" max="950" step="25" value="700">
+      </label>
+      <label>Dip length <output name="dipOut"></output>
+        <input type="range" name="dip" min="0" max="8000" step="250" value="3000">
+      </label>
+      <label>Client timeout <output name="timeoutOut"></output>
+        <input type="range" name="timeout" min="300" max="3000" step="100" value="1000">
+      </label>
+      <label>Seed <output name="seedOut"></output>
+        <input type="range" name="seed" min="1" max="50" value="1">
+      </label>
+    </form>
+    <p class="legend" aria-hidden="true">
+      <span><i style="background:var(--muted)"></i>sent to server</span>
+      <span><i style="background:var(--ok)"></i>answered in time</span>
+      <span><i style="background:var(--no)"></i>capacity dip</span>
+    </p>
+    <section class="grid2" id="o-cards" aria-live="polite"></section>
+
+    <h2 class="section-h">3. In code</h2>
+    <section class="panel api">
+      <div>
+        <p><code>retryFetch</code> applies all of it to <code>fetch</code>: only idempotent methods or
+          requests with an <code>Idempotency-Key</code> are retried, <code>Retry-After</code> is
+          respected, every retry spends from a shared budget, and an open breaker refuses at once.</p>
+        <ol class="sources">
+          <li><a href="https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/">Brooker, Exponential Backoff And Jitter, AWS 2015</a></li>
+          <li><a href="https://sre.google/sre-book/handling-overload/">Google SRE book, ch. 21 Handling Overload</a></li>
+          <li><a href="https://www.usenix.org/conference/osdi22/presentation/huang-lexiang">Huang et al., Metastable Failures in the Wild, OSDI 2022</a></li>
+          <li><a href="https://www.rfc-editor.org/rfc/rfc9110#section-9.2.2">RFC 9110 9.2.2 idempotent methods, 10.2.3 Retry-After</a></li>
+          <li><a href="https://martinfowler.com/bliki/CircuitBreaker.html">Fowler, CircuitBreaker</a></li>
+        </ol>
+      </div>
+      <pre><code>import { retryFetch } from "./src/retry.js";
+import { createRetryBudget, createCircuitBreaker } from "./src/budget.js";
+
+const budget = createRetryBudget({ ratio: 0.1 });
+const breaker = createCircuitBreaker({ failureThreshold: 5 });
+
+const res = await retryFetch("/api/orders/42", {}, {
+  strategy: "full", base: 100, cap: 10_000,
+  maxAttempts: 3, budget, breaker,
+});</code></pre>
+    </section>
+  </main>
+
+  <script type="module">
+    import { simulateContention } from "./src/contention.js";
+    import { POLICIES, simulateOverload } from "./src/overload.js";
+    import { STRATEGIES } from "./src/backoff.js";
+
+    const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    const ms = (v) => (v >= 1000 ? `${(v / 1000).toFixed(v >= 10_000 ? 0 : 1)}s` : `${Math.round(v)}ms`);
+    const NAMES = { constant: "Constant", exponential: "Exponential", full: "Full jitter", equal: "Equal jitter", decorrelated: "Decorrelated" };
+
+    function canvasCtx(canvas) {
+      const dpr = window.devicePixelRatio || 1;
+      const w = canvas.clientWidth, h = canvas.clientHeight;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      const ctx = canvas.getContext("2d");
+      ctx.scale(dpr, dpr);
+      return { ctx, w, h };
+    }
+
+    // Contention
+    const cForm = document.getElementById("c-controls");
+    const cCards = document.getElementById("c-cards");
+
+    function renderContention() {
+      const v = (n) => Number(cForm.elements[n].value);
+      const s = { clients: v("clients"), base: v("base"), seed: v("seed") };
+      cForm.elements.clientsOut.value = s.clients;
+      cForm.elements.baseOut.value = `${s.base}ms`;
+      cForm.elements.seedOut.value = s.seed;
+
+      const runs = STRATEGIES.map((strategy) => simulateContention({ ...s, strategy }));
+      const fewest = Math.min(...runs.map((r) => r.calls));
+      const most = Math.max(...runs.map((r) => r.calls));
+      const longest = Math.max(...runs.map((r) => r.completionMs));
+      const peak = Math.max(1, ...runs.flatMap((r) => r.load));
+
+      const cards = runs.map((r) => {
+        const el = document.createElement("article");
+        el.className = `panel card ${r.calls === fewest ? "best" : r.calls === most ? "worst" : ""}`;
+        el.innerHTML = `
+          <header><h3>${NAMES[r.strategy]}</h3><span class="tag">${ms(r.completionMs)}</span></header>
+          <div class="big"><strong>${r.calls.toLocaleString()}</strong><span>calls to commit ${r.clients}</span></div>
+          <canvas role="img" aria-label="${NAMES[r.strategy]}: server calls per 10ms over ${ms(r.completionMs)}"></canvas>`;
+        return { el, r };
+      });
+      cCards.replaceChildren(...cards.map((c) => c.el));
+
+      requestAnimationFrame(() => {
+        for (const { el, r } of cards) {
+          const { ctx, w, h } = canvasCtx(el.querySelector("canvas"));
+          // Shared x axis: every card is drawn against the slowest run.
+          const n = Math.ceil(longest / 10) || 1;
+          const bw = w / n;
+          ctx.fillStyle = css("--accent");
+          r.load.forEach((x, i) => {
+            const bh = (x / peak) * (h - 2);
+            ctx.fillRect(i * bw, h - bh, Math.max(1, bw), bh);
+          });
+        }
+      });
+    }
+
+    // Overload
+    const oForm = document.getElementById("o-controls");
+    const oCards = document.getElementById("o-cards");
+
+    function renderOverload() {
+      const v = (n) => Number(oForm.elements[n].value);
+      const rate = v("rate"), dip = v("dip"), timeoutMs = v("timeout"), seed = v("seed");
+      oForm.elements.rateOut.value = `${rate}/s`;
+      oForm.elements.dipOut.value = ms(dip);
+      oForm.elements.timeoutOut.value = ms(timeoutMs);
+      oForm.elements.seedOut.value = seed;
+      document.getElementById("rateText").textContent = `${rate} a second`;
+      document.getElementById("timeoutText").textContent = ms(timeoutMs);
+
+      const runs = Object.keys(POLICIES).map((policy) =>
+        simulateOverload({ policy, seed, rate, timeoutMs, dipStart: 5000, dipEnd: 5000 + dip }));
+      const peak = Math.max(...runs.flatMap((r) => r.timeline.map((b) => b.sent)));
+
+      const cards = runs.map((r) => {
+        const el = document.createElement("article");
+        el.className = `panel card wide ${r.recovered ? "ok" : "bad"}`;
+        const verdict = r.recovered
+          ? `recovered${r.recoveredAfterMs ? ` ${ms(r.recoveredAfterMs)} after the dip` : ""}`
+          : "never recovered";
+        el.innerHTML = `
+          <header><h3>${r.label}</h3><span class="verdict">${verdict}</span></header>
+          <canvas role="img" aria-label="${r.label}: requests sent and answered over 30 seconds, ${verdict}"></canvas>
+          <dl>
+            <div><dt>load</dt><dd>${r.amplification.toFixed(2)}x</dd></div>
+            <div><dt>answered</dt><dd>${Math.round((r.totals.succeeded / r.totals.fresh) * 100)}%</dd></div>
+            <div class="${r.wastedShare > 0.5 ? "bad" : ""}"><dt>wasted work</dt><dd>${Math.round(r.wastedShare * 100)}%</dd></div>
+          </dl>`;
+        return { el, r };
+      });
+      oCards.replaceChildren(...cards.map((c) => c.el));
+
+      requestAnimationFrame(() => {
+        for (const { el, r } of cards) {
+          const { ctx, w, h } = canvasCtx(el.querySelector("canvas"));
+          const n = r.timeline.length;
+          const bw = w / n;
+          const span = n * 250;
+          ctx.fillStyle = css("--no");
+          ctx.globalAlpha = 0.18;
+          ctx.fillRect((r.dipStart / span) * w, 0, ((r.dipEnd - r.dipStart) / span) * w, h);
+          ctx.globalAlpha = 1;
+          const y = (x) => h - (x / peak) * (h - 2);
+          ctx.fillStyle = css("--muted");
+          r.timeline.forEach((b, i) => ctx.fillRect(i * bw, y(b.sent), Math.max(1, bw - 1), h - y(b.sent)));
+          ctx.fillStyle = css("--ok");
+          r.timeline.forEach((b, i) => ctx.fillRect(i * bw, y(b.good), Math.max(1, bw - 1), h - y(b.good)));
+          // capacity line
+          ctx.strokeStyle = css("--text");
+          ctx.globalAlpha = 0.5;
+          ctx.setLineDash([4, 4]);
+          ctx.beginPath();
+          const c = y((r.capacity * span) / n / 1000);
+          ctx.moveTo(0, c); ctx.lineTo(w, c);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.globalAlpha = 1;
+        }
+      });
+    }
+
+    cForm.addEventListener("input", renderContention);
+    oForm.addEventListener("input", renderOverload);
+    let t;
+    window.addEventListener("resize", () => { clearTimeout(t); t = setTimeout(() => { renderContention(); renderOverload(); }, 100); });
+    renderContention();
+    renderOverload();
+  </script>
+</body>
+</html>
