@@ -181,3 +181,18 @@ test("a stream body is sent once, since it cannot be replayed", async () => {
   assert.equal(res.retryGaveUp, "body not replayable");
   assert.equal(calls.length, 1);
 });
+
+test("an aborted half-open probe does not leave the breaker stuck", async () => {
+  let t = 0;
+  const breaker = createCircuitBreaker({ failureThreshold: 1, resetMs: 100 });
+  breaker.failure(t);
+  t = 200;
+  const controller = new AbortController();
+  const hang = (input, init) => new Promise((_, reject) => {
+    init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+  });
+  const pending = retryFetch("http://x/", { signal: controller.signal }, { fetch: hang, breaker, now: () => t });
+  controller.abort();
+  await assert.rejects(pending, { name: "AbortError" });
+  assert.equal(breaker.allow(t), true);
+});

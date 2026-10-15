@@ -84,6 +84,12 @@ export function createCircuitBreaker({ failureThreshold = 5, resetMs = 5_000 } =
       }
       return false;
     },
+    // The caller gave up on a call without learning anything (it aborted).
+    // Hands the half-open probe slot back; otherwise nothing ever reports
+    // and the breaker refuses every call from then on.
+    release() {
+      probing = false;
+    },
     success() {
       state = "closed";
       failures = 0;

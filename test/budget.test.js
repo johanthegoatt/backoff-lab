@@ -64,3 +64,13 @@ test("a failed probe reopens for a fresh cool-down", () => {
   assert.equal(cb.allow(1999), false);
   assert.equal(cb.allow(2000), true);
 });
+
+test("release hands the half-open probe slot back", () => {
+  const breaker = createCircuitBreaker({ failureThreshold: 1, resetMs: 10 });
+  breaker.failure(0);
+  assert.equal(breaker.allow(20), true);
+  assert.equal(breaker.allow(20), false);
+  breaker.release();
+  assert.equal(breaker.allow(20), true);
+  assert.equal(breaker.state, "half-open");
+});

@@ -74,7 +74,10 @@ export async function retryFetch(input, init = {}, {
       // Clone per attempt so a Request body is still unread for the next try.
       res = await doFetch(request ? request.clone() : input, init);
     } catch (e) {
-      if (e?.name === "AbortError" || signal?.aborted) throw e;
+      if (e?.name === "AbortError" || signal?.aborted) {
+        breaker?.release?.();
+        throw e;
+      }
       err = e;
     }
 
