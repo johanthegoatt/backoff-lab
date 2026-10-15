@@ -10,6 +10,8 @@
 //   parking the caller for an hour.
 // - Draws delays from a jittered backoff, spends from an optional retry
 //   budget, and refuses outright while an optional circuit breaker is open.
+// - `attemptTimeoutMs` turns a hung attempt into a retryable TimeoutError;
+//   `deadlineMs` stops before a wait that would end past the overall deadline.
 
 import { createBackoff } from "./backoff.js";
 
@@ -51,6 +53,7 @@ export async function retryFetch(input, init = {}, {
   strategy = "full", base = 100, cap = 10_000, random = Math.random,
   maxRetryAfterMs = cap,
   budget = null, breaker = null,
+  attemptTimeoutMs = null, deadlineMs = null,
   now = () => Date.now(), sleep = defaultSleep,
   onRetry = () => {},
 } = {}) {
@@ -64,21 +67,36 @@ export async function retryFetch(input, init = {}, {
   const backoff = createBackoff(strategy, { base, cap, random });
   const signal = init.signal ?? request?.signal;
 
-  budget?.recordRequest(now());
+  const startedAt = now();
+  budget?.recordRequest(startedAt);
 
   for (let attempt = 1; ; attempt++) {
     if (breaker && !breaker.allow(now())) throw new CircuitOpenError();
 
+    // A hung attempt is a failure to retry, not a reason to wait forever,
+    // so it gets its own timer, and the caller's signal still wins.
+    let timeout = null;
+    let timer = null;
+    let attemptInit = init;
+    if (attemptTimeoutMs != null) {
+      const controller = new AbortController();
+      timer = setTimeout(() => controller.abort(), attemptTimeoutMs);
+      timeout = controller.signal;
+      attemptInit = { ...init, signal: signal ? AbortSignal.any([signal, timeout]) : timeout };
+    }
+
     let res, err;
     try {
       // Clone per attempt so a Request body is still unread for the next try.
-      res = await doFetch(request ? request.clone() : input, init);
+      res = await doFetch(request ? request.clone() : input, attemptInit);
     } catch (e) {
-      if (e?.name === "AbortError" || signal?.aborted) {
+      if (signal?.aborted || (e?.name === "AbortError" && !timeout?.aborted)) {
         breaker?.release?.();
         throw e;
       }
-      err = e;
+      err = timeout?.aborted ? Object.assign(new Error(`attempt timed out after ${attemptTimeoutMs}ms`), { name: "TimeoutError" }) : e;
+    } finally {
+      clearTimeout(timer);
     }
 
     const retryable = err !== undefined || RETRYABLE_STATUS.has(res.status);
@@ -104,6 +122,8 @@ export async function retryFetch(input, init = {}, {
       if (asked > maxRetryAfterMs) return give("retry-after too long");
       wait = Math.max(wait, asked);
     }
+    // Waiting past the caller's deadline only to be cut off helps nobody.
+    if (deadlineMs != null && now() + wait - startedAt >= deadlineMs) return give("deadline exceeded");
     if (budget && !budget.tryRetry(now())) return give("retry budget spent");
 
     // Drain the body so the connection can be reused.

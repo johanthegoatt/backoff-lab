@@ -64,6 +64,7 @@ Decisions it makes, in order:
 4. `Retry-After` in seconds or as an HTTP-date sets a floor on the wait (RFC 9110 10.2.3). One longer than `maxRetryAfterMs` ends the loop.
 5. Each retry spends from the budget; an empty budget ends the loop.
 6. 429 does not count against the breaker, because it is the server pacing this client rather than failing.
+7. `attemptTimeoutMs` aborts an attempt that has not produced response headers in time and retries it as a `TimeoutError`. `deadlineMs` ends the loop before any wait that would finish past the overall deadline. The caller's own `signal` always wins and is never retried.
 
 When it gives up on a response, `res.retryGaveUp` says why. Discarded bodies are cancelled so the connection can be reused.
 

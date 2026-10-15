@@ -196,3 +196,41 @@ test("an aborted half-open probe does not leave the breaker stuck", async () => 
   await assert.rejects(pending, { name: "AbortError" });
   assert.equal(breaker.allow(t), true);
 });
+
+test("a hung attempt times out and the retry succeeds", async () => {
+  let call = 0;
+  const fetch = (input, init) => {
+    call++;
+    if (call === 1) {
+      return new Promise((_, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason)));
+    }
+    return Promise.resolve(new Response("ok"));
+  };
+  const retries = [];
+  const res = await retryFetch("http://x/", {}, {
+    fetch, attemptTimeoutMs: 30, ...fast({ onRetry: (r) => retries.push(r.error?.name) }).opts,
+  });
+  assert.equal(res.status, 200);
+  assert.deepEqual(retries, ["TimeoutError"]);
+});
+
+test("the caller's abort still wins over the attempt timer", async () => {
+  const controller = new AbortController();
+  const fetch = (input, init) => new Promise((_, reject) => {
+    init.signal.addEventListener("abort", () => reject(init.signal.reason));
+  });
+  const pending = retryFetch("http://x/", { signal: controller.signal }, { fetch, attemptTimeoutMs: 10_000, ...fast().opts });
+  controller.abort();
+  await assert.rejects(pending, { name: "AbortError" });
+});
+
+test("stops before a wait that would cross the deadline", async () => {
+  let t = 0;
+  const { fetch, calls } = scripted(503, 503, 503, 200);
+  const res = await retryFetch("http://x/", {}, {
+    fetch, maxAttempts: 5, deadlineMs: 250, now: () => t,
+    sleep: async (ms) => { t += ms; }, random: () => 0.99, base: 100,
+  });
+  assert.equal(res.retryGaveUp, "deadline exceeded");
+  assert.equal(calls.length, 2);
+});
