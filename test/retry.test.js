@@ -145,3 +145,39 @@ test("works against a real server over sockets", async () => {
     server.close();
   }
 });
+
+test("a POST Request object is not retried even with no init", async () => {
+  const { fetch, calls } = scripted(503, 200);
+  const res = await retryFetch(new Request("http://x/", { method: "POST", body: "pay" }), undefined, { fetch, ...fast().opts });
+  assert.equal(res.status, 503);
+  assert.equal(res.retryGaveUp, "not idempotent");
+  assert.equal(calls.length, 1);
+});
+
+test("a Request's Idempotency-Key header makes it retryable", async () => {
+  const { fetch, calls } = scripted(503, 200);
+  const req = new Request("http://x/", { method: "POST", body: "pay", headers: { "Idempotency-Key": "k1" } });
+  const res = await retryFetch(req, undefined, { fetch, ...fast().opts });
+  assert.equal(res.status, 200);
+  assert.equal(calls.length, 2);
+});
+
+test("every attempt gets a fresh copy of a Request body", async () => {
+  const bodies = [];
+  const fetch = async (input) => {
+    bodies.push(await input.text());
+    return new Response("x", { status: bodies.length < 3 ? 503 : 200 });
+  };
+  const req = new Request("http://x/", { method: "PUT", body: "same body" });
+  const res = await retryFetch(req, undefined, { fetch, ...fast().opts });
+  assert.equal(res.status, 200);
+  assert.deepEqual(bodies, ["same body", "same body", "same body"]);
+});
+
+test("a stream body is sent once, since it cannot be replayed", async () => {
+  const { fetch, calls } = scripted(503, 200);
+  const body = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode("x")); c.close(); } });
+  const res = await retryFetch("http://x/", { method: "PUT", body, duplex: "half" }, { fetch, ...fast().opts });
+  assert.equal(res.retryGaveUp, "body not replayable");
+  assert.equal(calls.length, 1);
+});

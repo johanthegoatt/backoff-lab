@@ -54,10 +54,15 @@ export async function retryFetch(input, init = {}, {
   now = () => Date.now(), sleep = defaultSleep,
   onRetry = () => {},
 } = {}) {
-  const method = (init.method ?? "GET").toUpperCase();
-  const safe = isRetrySafe(method, init.headers);
+  // A Request carries its own method, headers and signal; reading only
+  // `init` treated `new Request(url, { method: "POST" })` as a GET and retried it.
+  const request = input instanceof Request ? input : null;
+  const method = (init.method ?? request?.method ?? "GET").toUpperCase();
+  const safe = isRetrySafe(method, init.headers ?? request?.headers);
+  // A stream body is read once by the first attempt and cannot be sent again.
+  const replayable = !(init.body instanceof ReadableStream);
   const backoff = createBackoff(strategy, { base, cap, random });
-  const signal = init.signal;
+  const signal = init.signal ?? request?.signal;
 
   budget?.recordRequest(now());
 
@@ -66,7 +71,8 @@ export async function retryFetch(input, init = {}, {
 
     let res, err;
     try {
-      res = await doFetch(input, init);
+      // Clone per attempt so a Request body is still unread for the next try.
+      res = await doFetch(request ? request.clone() : input, init);
     } catch (e) {
       if (e?.name === "AbortError" || signal?.aborted) throw e;
       err = e;
@@ -89,6 +95,7 @@ export async function retryFetch(input, init = {}, {
     };
 
     if (!safe) return give("not idempotent");
+    if (!replayable) return give("body not replayable");
     if (attempt >= maxAttempts) return give("attempts exhausted");
     if (asked !== null) {
       if (asked > maxRetryAfterMs) return give("retry-after too long");

@@ -4,7 +4,7 @@ Retry policy, measured. Jittered backoff, an SRE-style retry budget and a circui
 
 **Live:** https://backoff-lab.johanthegoat.xyz
 
-Zero dependencies. Node 20+. `npm test` runs 39 tests, including `retryFetch` against a real `node:http` server.
+Zero dependencies. Node 20+. `npm test` covers every module, including `retryFetch` against a real `node:http` server.
 
 ## What is in it
 
@@ -60,7 +60,7 @@ Decisions it makes, in order:
 
 1. Refuse with `CircuitOpenError` if the breaker is open. No network call.
 2. Network errors and 408, 429, 500, 502, 503, 504 are retryable. Anything else returns as is.
-3. Only GET, HEAD, OPTIONS, TRACE, PUT and DELETE are retried (RFC 9110 9.2.2), or any request carrying an `Idempotency-Key`. A POST without one returns its 503 rather than risk a second charge.
+3. Only GET, HEAD, OPTIONS, TRACE, PUT and DELETE are retried (RFC 9110 9.2.2), or any request carrying an `Idempotency-Key`. Method and headers come from the `Request` when one is passed, and each attempt sends a fresh clone of it; a `ReadableStream` body is never retried. A POST without one returns its 503 rather than risk a second charge.
 4. `Retry-After` in seconds or as an HTTP-date sets a floor on the wait (RFC 9110 10.2.3). One longer than `maxRetryAfterMs` ends the loop.
 5. Each retry spends from the budget; an empty budget ends the loop.
 6. 429 does not count against the breaker, because it is the server pacing this client rather than failing.
