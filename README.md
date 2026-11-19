@@ -42,6 +42,26 @@ Exponential backoff without jitter spaces retries out but keeps the colliding cl
 
 The dip grows the queue past the client timeout. From then on the server spends 85% of its capacity on requests whose clients already gave up, the timeouts produce retries, and the retries keep the queue long. Removing the trigger does not fix it. The SRE book's numbers hold: three attempts push load to just under 3x, and the per-client 10% ratio holds it near 1.1x.
 
+## Picking a schedule without running one
+
+`moments(strategy, attempt, { base, cap })` gives the expected delay and its
+spread for a single attempt on paper, so you can compare schedules before
+simulating. The jittered schedules draw uniformly, so these are the textbook
+moments of a uniform range (`c = min(cap, base * 2^attempt)`):
+
+| Schedule | Mean | Variance |
+| --- | --- | --- |
+| Constant | `base` | 0 |
+| Exponential | `c` | 0 |
+| Full jitter | `c / 2` | `c² / 12` |
+| Equal jitter | `3c / 4` | `c² / 48` |
+
+Full jitter has the lower mean but the wider spread; equal jitter keeps a floor
+of `c/2` so it never retries instantly but clusters less tightly. Decorrelated
+jitter depends on the previous sleep rather than the attempt number, so it has
+no per-attempt closed form and returns `null`. A test checks the formulas
+against a 200k-draw seeded Monte Carlo run.
+
 ## retryFetch
 
 ```js
