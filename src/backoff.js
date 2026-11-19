@@ -55,3 +55,36 @@ export function createBackoff(strategy, { base = 100, cap = 10_000, random = Mat
       throw new RangeError(`unknown strategy "${strategy}", expected one of ${STRATEGIES.join(", ")}`);
   }
 }
+
+// The expected delay and its spread for one attempt, worked out on paper rather
+// than by simulation, so you can compare strategies without running one. Each
+// jittered schedule draws uniformly, so the mean and variance are the textbook
+// moments of a uniform range:
+//
+//   full    sleep ~ U(0, c)        mean = c/2,    var = c^2 / 12
+//   equal   sleep ~ c/2 + U(0,c/2) mean = 3c/4,   var = c^2 / 48
+//
+// where c = min(cap, base * 2^attempt). Full jitter has the lower mean but the
+// wider spread; equal jitter keeps a floor of c/2 so it never retries instantly
+// but clusters less tightly. Constant and exponential draw nothing, so their
+// variance is zero. Decorrelated jitter depends on the previous sleep, not the
+// attempt number, so it has no per-attempt closed form and returns null.
+export function moments(strategy, attempt, { base = 100, cap = 10_000 } = {}) {
+  if (!(base > 0) || !(cap >= base)) throw new RangeError("need 0 < base <= cap");
+  const c = ceiling(base, cap, attempt);
+  const make = (mean, variance) => ({ mean, variance, stddev: Math.sqrt(variance) });
+  switch (strategy) {
+    case "constant":
+      return make(base, 0);
+    case "exponential":
+      return make(c, 0);
+    case "full":
+      return make(c / 2, (c * c) / 12);
+    case "equal":
+      return make((3 * c) / 4, (c * c) / 48);
+    case "decorrelated":
+      return null;
+    default:
+      throw new RangeError(`unknown strategy "${strategy}", expected one of ${STRATEGIES.join(", ")}`);
+  }
+}
